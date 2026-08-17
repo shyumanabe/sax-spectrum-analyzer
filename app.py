@@ -122,7 +122,7 @@ class _AudioPlayer(QObject):
     @pyqtSlot()
     def pause(self):
         if self._stream and not self._stream.closed:
-            self._stream.pause()
+            self._stream.stop()
 
     @pyqtSlot()
     def resume(self):

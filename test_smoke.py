@@ -4,9 +4,14 @@
 import os
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+from PyQt6.QtWidgets import QApplication
+
 from app import _AudioPlayer, MainWindow
 
 import numpy as np
+
+# QWidget subclasses (e.g. MainWindow) require a QApplication to exist first.
+_qapp = QApplication.instance() or QApplication([])
 
 
 def test_player_signal_exists():
@@ -27,9 +32,14 @@ def test_player_seek_method():
 
 def testMainWindow_creates_seeksilder():
     win = MainWindow()
-    assert hasattr(win, "seek_slider"), "MainWindow must have seek_slider"
-    assert not win.seek_slider.isEnabled(), "slider should be disabled before loading"
-    print("[PASS] QSlider exists and is initially disabled")
+    try:
+        assert hasattr(win, "seek_slider"), "MainWindow must have seek_slider"
+        assert not win.seek_slider.isEnabled(), "slider should be disabled before loading"
+        print("[PASS] QSlider exists and is initially disabled")
+    finally:
+        # MainWindow spins up a QThread in __init__; it must be stopped
+        # before the object is destroyed or Qt aborts the process.
+        win.close()
 
 
 def test_no_positionChanged_signal():

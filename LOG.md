@@ -18,3 +18,14 @@
 - **README.md**: Streamlit → PyQt6 への移行を反映し、使用方法を `uv run python app.py` に更新
 - スモークテスト (`test_smoke.py`) を正常に通過確認
 - 計算機: macOS (Apple Silicon) / User: Shu Manabe
+
+## 2026-08-17 (動作確認とPauseバグ修正)
+
+- **動作確認**: `QT_QPA_PLATFORM=offscreen` でPyQt6アプリを実起動し、合成音源(440Hz+倍音, 3秒)を用いてOpen→Play→Pause→Resume→Stopの一連の流れをスクリーンショット付きで検証
+- **app.py**: `_AudioPlayer.pause()` が `self._stream.pause()` を呼んでいたが、`sounddevice.OutputStream` には `pause()` メソッドが存在せず、**再生中にPauseを押すとAttributeErrorで失敗する重大バグ**を発見。`self._stream.stop()` に修正（`resume()` 側は `self._stream.start()` で再開できることを確認済み）
+- 修正後、Pauseで音声とスペクトラムが凍結し、Resumeで一時停止位置から再開、Stopでサイレント基線に戻ることを画面キャプチャで確認
+- **test_smoke.py**: 2件のバグを修正
+  - `MainWindow`（QWidget）を生成する前に`QApplication`が存在しておらず `QWidget: Must construct a QApplication before a QWidget` でクラッシュしていたため、モジュール先頭で `QApplication` を一度だけ生成するように修正
+  - `testMainWindow_creates_seeksilder()` が `MainWindow` 内部で起動する `QThread` を停止せずに関数を抜けており、オブジェクト破棄時に `QThread: Destroyed while thread '' is still running` で異常終了していたため、`win.close()` を `finally` で呼び出すように修正
+  - 修正後 `uv run python test_smoke.py` が exit 0 で正常終了することを確認
+- 計算機: macOS (Apple Silicon) / User: Shu Manabe
