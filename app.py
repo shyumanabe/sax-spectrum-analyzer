@@ -1,5 +1,16 @@
 # -*- coding: utf-8 -*-
-"""SAX Spectrum Analyzer - PyQt6 real-time synchronized audio visualization."""
+"""SAX Spectrum Analyzer - PyQt6 real-time synchronized audio visualization.
+
+Supports loading two independent audio files (File A / File B) side by side
+so their spectra can be visually compared. Playback (open/play/pause/stop/
+seek) is independent per file; FFT size and max displayed frequency are
+shared between both channels to keep the comparison fair.
+"""
+
+# Defers annotation evaluation so `X | None` return/parameter annotations
+# work on the project's target Python 3.9 (PEP 604 union syntax needs 3.10+
+# at runtime; this project pins Python 3.9 via .python-version).
+from __future__ import annotations
 
 import sys
 import threading
@@ -21,6 +32,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSlider,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -188,7 +200,8 @@ class _AudioPlayer(QObject):
 
 
 # ==============================================================================
-# MainWindow - GUI with pyqtgraph spectrum display + seek bar
+# SpectrumWorker - extracts a single spectrum column from a precomputed
+# spectrogram at a given timestamp
 # ==============================================================================
 
 class SpectrumWorker(QObject):
@@ -202,11 +215,22 @@ class SpectrumWorker(QObject):
         self.finished.emit(freqs, mag)
 
 
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("SAX Spectrum Analyzer")
-        self.resize(900, 600)
+# ==============================================================================
+# ChannelPanel - one independent audio channel: its own player, spectrogram,
+# playback controls, seek bar and spectrum plot. Two of these are placed side
+# by side (or stacked) so two saxophone recordings can be compared visually.
+# Open/Play/Pause/Stop/Seek are independent per channel; FFT size and max
+# displayed frequency are driven from MainWindow and applied identically to
+# both channels so the comparison stays fair.
+# ==============================================================================
+
+class ChannelPanel(QWidget):
+    fileLoaded = pyqtSignal(float)  # emits the loaded file's Nyquist frequency
+
+    def __init__(self, title: str, curve_color: tuple, parent=None):
+        super().__init__(parent)
+        self._title = title
+        self._curve_color = curve_color
 
         # Audio state (cached on main thread to avoid cross-thread access)
         self._audio_data: np.ndarray | None = None
@@ -227,8 +251,6 @@ class MainWindow(QMainWindow):
         self._player = _AudioPlayer()
         self._player.moveToThread(self._thread)
         self._thread.start()
-
-        # Connect poll signal back to main thread
         self._player.positionPollResult.connect(self._on_poll_result)
 
         # Worker for spectrum extraction
@@ -245,26 +267,15 @@ class MainWindow(QMainWindow):
         self._init_plot()
         self._disable_seek()
 
-    def _disable_seek(self):
-        """Disable seek slider when no file is loaded."""
-        self.seek_slider.setEnabled(False)
-        self.seek_slider.setValue(0)
-        self.spin_max_freq.setEnabled(False)
-
-    def _enable_seek(self, duration: float):
-        """Enable seek slider and set range for the loaded file."""
-        steps = max(int(duration * 100), 1)
-        self.seek_slider.setMinimum(0)
-        self.seek_slider.setMaximum(steps)
-        self.seek_slider.setEnabled(True)
-        self.seek_slider.setValue(0)
+    # UI construction
 
     def _build_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
 
-        # Controls row
+        lbl_title = QLabel(f"<b>{self._title}</b>")
+        layout.addWidget(lbl_title)
+
         ctrl_row = QHBoxLayout()
         self.btn_open = QPushButton("Open File")
         self.btn_play = QPushButton("Play")
@@ -272,28 +283,13 @@ class MainWindow(QMainWindow):
         self.btn_stop = QPushButton("Stop")
         self.lbl_status = QLabel("No file loaded")
 
-        self.cmb_fft = QComboBox()
-        self.cmb_fft.addItems(["1024", "2048", "4096", "8192"])
-        self.cmb_fft.setCurrentText("4096")
-
-        self.spin_max_freq = QDoubleSpinBox()
-        self.spin_max_freq.setDecimals(0)
-        self.spin_max_freq.setRange(1, 1)
-        self.spin_max_freq.setSuffix(" Hz")
-        self.spin_max_freq.setEnabled(False)
-
         ctrl_row.addWidget(self.btn_open)
         ctrl_row.addWidget(self.btn_play)
         ctrl_row.addWidget(self.btn_pause)
         ctrl_row.addWidget(self.btn_stop)
-        ctrl_row.addWidget(QLabel("FFT size:"))
-        ctrl_row.addWidget(self.cmb_fft)
-        ctrl_row.addWidget(QLabel("Max Freq:"))
-        ctrl_row.addWidget(self.spin_max_freq)
         ctrl_row.addStretch()
         ctrl_row.addWidget(self.lbl_status)
 
-        # Seek bar row
         seek_row = QHBoxLayout()
         self.lbl_time = QLabel("Time: 0.00 s / 0.00 s")
         self.seek_slider = QSlider(Qt.Orientation.Horizontal)
@@ -303,43 +299,50 @@ class MainWindow(QMainWindow):
         seek_row.addWidget(self.lbl_time)
         seek_row.addWidget(self.seek_slider, 1)
 
-        # Plot widget
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setLabel("left", "Magnitude [dB]")
         self.plot_widget.setLabel("bottom", "Frequency [Hz]")
         self.plot_widget.setYRange(-80, 5)
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
 
-        main_layout.addLayout(ctrl_row)
-        main_layout.addLayout(seek_row)
-        main_layout.addWidget(self.plot_widget)
+        layout.addLayout(ctrl_row)
+        layout.addLayout(seek_row)
+        layout.addWidget(self.plot_widget, 1)
 
     def _connect_signals(self):
         self.btn_open.clicked.connect(self._on_open_file)
         self.btn_play.clicked.connect(self._on_play)
         self.btn_pause.clicked.connect(self._on_pause)
         self.btn_stop.clicked.connect(self._on_stop)
-        self.cmb_fft.currentTextChanged.connect(self._on_fft_changed)
-        self.spin_max_freq.valueChanged.connect(self._on_max_freq_changed)
-
-        # Player signals
         self._player.playbackFinished.connect(self._on_playback_finished)
-
-        # Seek slider
         self.seek_slider.valueChanged.connect(self._on_seek_slider_changed)
 
     def _init_plot(self):
-        pen = pg.mkPen((100, 150, 255), width=2)
+        pen = pg.mkPen(self._curve_color, width=2)
         self._curve = self.plot_widget.plot(pen=pen)
         baseline = np.full(1000, -80.0)
         self._base_curve = self.plot_widget.plot(baseline, pen=None)
+        fill_color = (*self._curve_color, 64)
         self._fill = pg.FillBetweenItem(
-            self._curve, self._base_curve, brush=pg.mkBrush(100, 150, 255, 64)
+            self._curve, self._base_curve, brush=pg.mkBrush(*fill_color)
         )
         self.plot_widget.addItem(self._fill)
 
+    def _disable_seek(self):
+        """Disable seek slider when no file is loaded."""
+        self.seek_slider.setEnabled(False)
+        self.seek_slider.setValue(0)
+
+    def _enable_seek(self, duration: float):
+        """Enable seek slider and set range for the loaded file."""
+        steps = max(int(duration * 100), 1)
+        self.seek_slider.setMinimum(0)
+        self.seek_slider.setMaximum(steps)
+        self.seek_slider.setEnabled(True)
+        self.seek_slider.setValue(0)
+
     def _slider_time(self, value: int) -> float:
-        """Convert slider value to seconds using main-thread cached duration."""
+        """Convert slider value to seconds using cached duration."""
         steps = self.seek_slider.maximum()
         if steps == 0 or self._duration_s == 0.0:
             return 0.0
@@ -357,12 +360,36 @@ class MainWindow(QMainWindow):
         self.lbl_time.setText(f"Time: {target_time:.2f} s / {self._duration_s:.2f} s")
         self._update_spectrum_at_time(target_time)
 
+    # Settings shared across channels, applied by MainWindow
+
+    def nyquist(self) -> float | None:
+        """Return this channel's Nyquist frequency, or None if no file is loaded."""
+        if self._spec_freqs is None or len(self._spec_freqs) == 0:
+            return None
+        return float(self._spec_freqs[-1])
+
+    def set_n_fft(self, n_fft: int):
+        """Apply a new (shared) FFT size, recomputing this channel's spectrogram."""
+        self._n_fft = n_fft
+        if self._audio_data is None:
+            return
+        was_playing = self._is_playing and not self._is_paused
+        if was_playing:
+            self._on_pause()
+        self._recompute_spectrogram()
+        if was_playing:
+            self._on_play()
+
+    def set_max_freq(self, value: float):
+        """Apply a new (shared) max displayed frequency."""
+        self.plot_widget.setXRange(0, value)
+
     # File handling
 
     @pyqtSlot()
     def _on_open_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open Audio File", "",
+            self, f"Open Audio File - {self._title}", "",
             "Audio Files (*.wav *.flac *.mp3 *.ogg *.m4a);;All Files (*)",
         )
         if not path:
@@ -387,8 +414,7 @@ class MainWindow(QMainWindow):
             )
 
             file_name = Path(path).name
-            duration = self._duration_s
-            self.lbl_status.setText(f"Loaded: {file_name}  ({duration:.1f} s)")
+            self.lbl_status.setText(f"Loaded: {file_name}  ({self._duration_s:.1f} s)")
 
             # Resample for playback to match the output device's own rate -
             # some devices (Bluetooth in particular) don't reliably convert
@@ -398,28 +424,14 @@ class MainWindow(QMainWindow):
             y_play, play_sr = _resample_for_playback(y, sr, play_sr)
             self._player.load(y_play, play_sr)
 
-            # Enable seek slider with proper range
-            self._enable_seek(duration)
-
-            hi_freq = float(self._spec_freqs[-1])
-            self._enable_max_freq_control(hi_freq)
-
+            self._enable_seek(self._duration_s)
             self._show_silent_spectrum()
+
+            # Let MainWindow know so it can recompute the shared max-freq range.
+            self.fileLoaded.emit(float(self._spec_freqs[-1]))
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not load file:\n{e}")
-
-    def _enable_max_freq_control(self, nyquist: float):
-        """Set up the max-frequency spin box for the newly loaded file's Nyquist limit."""
-        self.spin_max_freq.blockSignals(True)
-        self.spin_max_freq.setRange(1, nyquist)
-        self.spin_max_freq.setValue(nyquist)
-        self.spin_max_freq.setEnabled(True)
-        self.spin_max_freq.blockSignals(False)
-        self.plot_widget.setXRange(0, nyquist)
-
-    def _on_max_freq_changed(self, value: float):
-        self.plot_widget.setXRange(0, value)
 
     def _recompute_spectrogram(self):
         """Recompute spectrogram when FFT size changes."""
@@ -431,18 +443,6 @@ class MainWindow(QMainWindow):
                 self._audio_data, self._audio_sr, n_fft=self._n_fft
             )
         )
-        # Nyquist frequency is unaffected by FFT size; keep the user's
-        # current max-frequency selection instead of resetting the view.
-        self.plot_widget.setXRange(0, self.spin_max_freq.value())
-
-    def _on_fft_changed(self, text: str):
-        self._n_fft = int(text)
-        was_playing = self._is_playing and not self._is_paused
-        if was_playing:
-            self._on_pause()
-        self._recompute_spectrogram()
-        if was_playing and self._audio_data is not None:
-            self._on_play()
 
     # Playback controls
 
@@ -548,11 +548,112 @@ class MainWindow(QMainWindow):
 
     # Cleanup
 
-    def closeEvent(self, event):
+    def shutdown(self):
+        """Stop playback and tear down this channel's background thread."""
         self._stop_timer()
         self._player.stop()
         self._thread.quit()
         self._thread.wait()
+
+
+# ==============================================================================
+# MainWindow - shared FFT size / max-frequency controls, a layout toggle
+# (side-by-side vs stacked), and two independent ChannelPanels.
+# ==============================================================================
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("SAX Spectrum Analyzer")
+        self.resize(1400, 700)
+
+        self.channel_a = ChannelPanel("File A", (100, 150, 255))
+        self.channel_b = ChannelPanel("File B", (255, 140, 60))
+        self.channel_a.fileLoaded.connect(self._on_channel_loaded)
+        self.channel_b.fileLoaded.connect(self._on_channel_loaded)
+
+        self._build_ui()
+        self._connect_signals()
+
+    def _build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+
+        # Shared controls row (applied identically to both channels)
+        shared_row = QHBoxLayout()
+
+        self.cmb_fft = QComboBox()
+        self.cmb_fft.addItems(["1024", "2048", "4096", "8192"])
+        self.cmb_fft.setCurrentText("4096")
+
+        self.spin_max_freq = QDoubleSpinBox()
+        self.spin_max_freq.setDecimals(0)
+        self.spin_max_freq.setRange(1, 1)
+        self.spin_max_freq.setSuffix(" Hz")
+        self.spin_max_freq.setEnabled(False)
+
+        self.cmb_layout = QComboBox()
+        self.cmb_layout.addItems(["左右に並べて表示", "上下に並べて表示"])
+
+        shared_row.addWidget(QLabel("FFT size:"))
+        shared_row.addWidget(self.cmb_fft)
+        shared_row.addWidget(QLabel("Max Freq:"))
+        shared_row.addWidget(self.spin_max_freq)
+        shared_row.addWidget(QLabel("Layout:"))
+        shared_row.addWidget(self.cmb_layout)
+        shared_row.addStretch()
+
+        # Two independent channels, side by side or stacked via the splitter
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.addWidget(self.channel_a)
+        self.splitter.addWidget(self.channel_b)
+        self.splitter.setSizes([1, 1])
+
+        main_layout.addLayout(shared_row)
+        main_layout.addWidget(self.splitter, 1)
+
+    def _connect_signals(self):
+        self.cmb_fft.currentTextChanged.connect(self._on_fft_changed)
+        self.spin_max_freq.valueChanged.connect(self._on_max_freq_changed)
+        self.cmb_layout.currentIndexChanged.connect(self._on_layout_changed)
+
+    def _on_fft_changed(self, text: str):
+        n_fft = int(text)
+        self.channel_a.set_n_fft(n_fft)
+        self.channel_b.set_n_fft(n_fft)
+
+    def _on_max_freq_changed(self, value: float):
+        self.channel_a.set_max_freq(value)
+        self.channel_b.set_max_freq(value)
+
+    def _on_layout_changed(self, index: int):
+        """Switch between side-by-side (0) and stacked (1) channel layout."""
+        orientation = Qt.Orientation.Horizontal if index == 0 else Qt.Orientation.Vertical
+        self.splitter.setOrientation(orientation)
+
+    def _on_channel_loaded(self, _nyquist: float):
+        """Recompute the shared max-frequency range whenever either channel loads a file."""
+        nyquists = [
+            n for n in (self.channel_a.nyquist(), self.channel_b.nyquist())
+            if n is not None
+        ]
+        if not nyquists:
+            return
+        hi_freq = max(nyquists)
+        self.spin_max_freq.blockSignals(True)
+        self.spin_max_freq.setRange(1, hi_freq)
+        self.spin_max_freq.setValue(hi_freq)
+        self.spin_max_freq.setEnabled(True)
+        self.spin_max_freq.blockSignals(False)
+        self.channel_a.set_max_freq(hi_freq)
+        self.channel_b.set_max_freq(hi_freq)
+
+    # Cleanup
+
+    def closeEvent(self, event):
+        self.channel_a.shutdown()
+        self.channel_b.shutdown()
         event.accept()
 
 

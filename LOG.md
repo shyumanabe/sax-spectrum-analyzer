@@ -59,3 +59,21 @@
 - **原因2（確定・修正）**: ロック除去後も実ウィンドウ表示時のみ比率0.83〜0.90程度のズレが残存。オフスクリーン（実描画なし）では比率0.997と完全に正常だったため、**pyqtgraphのアンチエイリアス付きカーブ再描画（30fps）がGILを長時間占有し、リアルタイムオーディオコールバックの実行機会を奪っている**ことを特定。`main()` の `pg.setConfigOptions(antialias=True)` を `antialias=False` に変更
 - **検証**: 上記2点の修正後、実際のm4aファイル・実ウィンドウ・実AirPods出力で全編(37.7秒)を再生し、壁時計37.71秒に対し再生位置37.077秒（比率0.983）、スモークテスト・Open/Play/Pause/Resume/Stopの回帰テストも含めて全て正常に完走することを確認。実サックス音の倍音列（基音+高調波、~16kHzまで）がスペクトラムに正しく表示されることも画面キャプチャで確認
 - 計算機: macOS (Apple Silicon) / User: Shu Manabe
+
+## 2026-08-17 (2音源比較機能の追加)
+
+- **背景**: 2つのサックス音源を入力し、スペクトラムの違いを目視で比較したいという要望を受けて実装。実装方針はユーザーに以下をインタビューし決定
+  - 表示レイアウト: 「重ねて表示」「上下2段」の提案に対し、ユーザーは「左右に分けるviewと上下にわけるviewを使い分けられるようにしたい」と回答 → レイアウト切替コンボボックスを追加する方針に変更
+  - 再生方式: 「個別に再生」を選択（各ファイルが独立したPlay/Pause/Stop/シークバーを持つ）
+  - FFT設定: 「共通設定」を選択（両ファイルに同じFFTサイズ・最大表示周波数を適用し、比較の公平性を担保）
+- **app.py**: 単一チャンネル前提だった `MainWindow` を大幅にリファクタリング
+  - 音声プレイヤー・スペクトログラム状態・Open/Play/Pause/Stop/シーク・プロット描画を1チャンネル分にまとめた `ChannelPanel(QWidget)` クラスを新設し、`_AudioPlayer` + 専用 `QThread` + `SpectrumWorker` + `QTimer` を各チャンネルが個別に保持するようにした（既存の単一チャンネル実装をそのまま2重化する形）
+  - `MainWindow` は `ChannelPanel` を2つ（File A: 青, File B: オレンジ）生成し、`QSplitter` で並べて表示。共有のFFTサイズコンボ・最大周波数スピンボックス・レイアウト切替コンボ（「左右に並べて表示」/「上下に並べて表示」、`QSplitter.setOrientation()` を切り替え）を追加し、両チャンネルに同じ設定を適用
+  - 最大周波数スピンボックスの範囲は、ロード済みチャンネルのナイキスト周波数の最大値を都度採用（片方だけロード済みでも動作し、2つ目をロードすると再計算される）
+  - Python 3.9 (`.python-version` 指定) では `def foo() -> float | None:` のようなPEP 604の関数シグネチャ型注釈が実行時に `TypeError` になることが判明（変数注釈は評価されないため既存コードでは問題化していなかった）。`from __future__ import annotations` をファイル先頭に追加して解消
+  - `_AudioPlayer`・`SpectrumWorker`・音声ロード/リサンプル関連のヘルパー関数は無変更（過去のGILロック競合・サンプルレート・表示ズレ修正をそのまま維持）
+- **test_smoke.py**: `MainWindow.seek_slider` への直接アクセスを `channel_a`/`channel_b` 経由に修正し、2チャンネルが独立して動作すること・共有FFT設定が両チャンネルに反映されること・レイアウト切替でSplitterの向きが変わることを検証するテストを追加。実オーディオデバイスへのアクセス（スピーカーからの実再生）はテストでは行わず、状態フラグの直接確認に留めた
+- **verify_dual_channel.py**（新規・動作確認用スクリプト、保存済み）: 倍音構成の異なる合成音（File A: 220Hz基音、File B: 330Hz基音）を生成し、`QFileDialog.getOpenFileName` をモックして実際のOpen File経路でFile A/Bにロード、左右レイアウト・上下レイアウトそれぞれでスクリーンショットを撮影し `verify_dual_channel_output/` に保存。2つのスペクトラムが色分けされ、周波数成分の違いが目視で明確に区別できることを確認
+- `uv run python test_smoke.py` (8件) ・ `uv run python verify_dual_channel.py` ともに正常終了を確認
+- README.md の Features / Usage / Project Structure を2音源比較機能に合わせて更新
+- 計算機: macOS (Apple Silicon) / User: Shu Manabe

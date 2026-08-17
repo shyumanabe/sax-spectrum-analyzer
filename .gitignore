@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Generated output from verification scripts (screenshots, synthetic wavs)
+verify_dual_channel_output/
