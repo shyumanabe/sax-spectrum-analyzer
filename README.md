@@ -1,4 +1,4 @@
-# SAX Spectrum Analyzer
+# SAX: Spectrum Analyzer eXtream
 
 Real-time audio spectrum analyzer built with Python, PyQt6, and pyqtgraph. Open up to two audio files (File A / File B), play them back independently, and visually compare their frequency spectra side by side.
 <img width="1543" height="840" alt="スクリーンショット 2026-08-17 13 57 27" src="https://github.com/user-attachments/assets/f4f3f028-7014-4ceb-8131-7b4e69eb7da0" />
