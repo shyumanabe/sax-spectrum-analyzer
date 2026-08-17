@@ -6,11 +6,12 @@ from scipy.fft import fft, fftfreq
 class SpectrumAnalyzer:
     """Core audio spectrum analysis logic."""
 
-    def __init__(self, sr=22050):
+    def __init__(self, sr=None):
         self.sr = sr
 
     def load_audio(self, file_path):
-        # Load audio and convert to mono
+        # Load audio and convert to mono, preserving the file's native
+        # sample rate (sr=None) unless a specific rate was requested.
         y, sr = librosa.load(file_path, sr=self.sr, mono=True)
         return y, sr
 
@@ -52,13 +53,21 @@ class SpectrumAnalyzer:
 
         return freqs, magnitudes_db, times, stft_matrix
 
-    def compute_full_spectrogram(self, y, sr, n_fft=4096):
-        """Compute full spectrogram for the entire audio."""
-        S = librosa.stft(y, n_fft=n_fft)
+    def compute_full_spectrogram(self, y, sr, n_fft=4096, hop_length=None):
+        """Compute full spectrogram for the entire audio.
+
+        hop_length must match what librosa.stft actually used, or the
+        returned time axis will be mislabeled relative to the true frame
+        positions (librosa.stft defaults hop_length to n_fft // 4 when
+        not given explicitly).
+        """
+        if hop_length is None:
+            hop_length = n_fft // 4
+        S = librosa.stft(y, n_fft=n_fft, hop_length=hop_length)
         S_abs = np.abs(S)
         S_db = librosa.amplitude_to_db(S_abs, ref=np.max)
         freqs = np.fft.rfftfreq(n_fft, 1 / sr)
-        times = librosa.frames_to_time(np.arange(S_db.shape[1]), sr=sr, hop_length=n_fft // 2)
+        times = librosa.frames_to_time(np.arange(S_db.shape[1]), sr=sr, hop_length=hop_length)
         return freqs, S_db, times
 
     def compute_instant_spectrum(self, y, sr, timestamp, n_fft=4096):

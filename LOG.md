@@ -29,3 +29,23 @@
   - `testMainWindow_creates_seeksilder()` が `MainWindow` 内部で起動する `QThread` を停止せずに関数を抜けており、オブジェクト破棄時に `QThread: Destroyed while thread '' is still running` で異常終了していたため、`win.close()` を `finally` で呼び出すように修正
   - 修正後 `uv run python test_smoke.py` が exit 0 で正常終了することを確認
 - 計算機: macOS (Apple Silicon) / User: Shu Manabe
+
+## 2026-08-17 (最大周波数コントロールの追加とサンプルレート起因の再生不具合の修正)
+
+- **不具合の切り分け**: 「音声が実時間の1秒あたり0.5秒程度しか進まない」という報告について実機検証したところ、ユーザーの症状は「音自体がスロー・低音化して聞こえる」であることを確認。`spectrum_analyzer.py` が `librosa.load(..., sr=22050)` で全ファイルを22050Hzに強制ダウンサンプルしており、出力デバイスが22050Hzを正しくネゴシエートできない環境ではサンプルレート不整合により再生が実質半速・低ピッチになりうることが原因と判断
+- **spectrum_analyzer.py**: `SpectrumAnalyzer.__init__` のデフォルト `sr` を `22050` → `None` に変更し、`librosa.load` が元ファイルのネイティブサンプリングレートを保持するように修正
+- **app.py**: `_load_audio_file` も `SpectrumAnalyzer(sr=None)` に合わせて修正。ネイティブレートの保持によりナイキスト周波数が実際の音源帯域まで拡大（例: 44.1kHz音源なら22050Hzまで表示可能に）
+- **app.py**: 新機能として「Max Freq」スピンボックスをツールバーに追加。ファイル読み込み時にナイキスト周波数を上限として初期化され、値を変更するとスペクトラム表示のX軸範囲(`plot_widget.setXRange`)に即座に反映される。FFTサイズ変更時は選択中の表示範囲を維持
+- README.md の Features セクションを更新
+- 計算機: macOS (Apple Silicon) / User: Shu Manabe
+
+## 2026-08-17 (再生0.5倍速・スペクトラム表示ズレの根本修正)
+
+- **症状**: サンプリングレートのネイティブ化後も「音声が0.5倍速程度で低音化して再生される」「音が聞こえるタイミングとスペクトラムのピーク表示のタイミングがズレる（無音なのにピークが出る／音が鳴っているのに出ない）」という報告があり、原因を実測で切り分けた
+- **原因1（表示ズレ）**: `spectrum_analyzer.py` の `compute_full_spectrogram` が `librosa.stft(y, n_fft=n_fft)` を `hop_length` 未指定で呼んでいたため実際には `n_fft // 4` が使われる一方、続く `librosa.frames_to_time` では `hop_length=n_fft // 2` を指定しており、**表示用の時間軸が実際のフレーム間隔の2倍に引き伸ばされていた**。合成音源（1kHzクリックを0/1/2/3/4秒に配置した5秒間のマーカー音源）で検証したところ、真の2.0秒地点で無音判定(-80dB)になるなど、常に実際の再生位置の半分の時点の内容が表示されていたことを確認
+  - `compute_full_spectrogram` に `hop_length` 引数を追加し、`librosa.stft` と `librosa.frames_to_time` の両方に同じ値（デフォルト `n_fft // 4`）を明示的に渡すよう修正
+- **原因2（0.5倍速再生）**: このMacのデフォルト出力デバイスが Bluetooth接続の AirPods Pro（ネイティブレート48000Hz固定）であり、音声ファイル自身のサンプリングレート（多くの場合44100Hzなど）でそのまま `sounddevice.OutputStream` を開いていたため、Bluetooth側でレート変換が正しく行われず速度・ピッチがずれていたと判明
+  - `app.py` に `_playback_samplerate()`（`sounddevice.query_devices(kind="output")` でデフォルト出力デバイスの実際のサンプルレートを取得）と `_resample_for_playback()`（`librosa.resample` で再生用データのみをそのレートに変換）を追加。周波数解析・スペクトログラム表示は引き続きファイルのネイティブレートを使用し、再生用データだけをデバイスのネイティブレートにリサンプルするよう分離
+- **検証**: マーカー音源を実際に `sounddevice` で再生し、壁時計時刻とアプリの再生位置・スペクトラムピーク出現タイミングを比較。真のクリック時刻(0/1/2/3/4秒)に対し `reported_pos` が0.021/1.003/2.005/2.987/3.989秒とほぼ一致し、ズレは再生開始時の固定バッファリング遅延(~0.08秒)のみで時間経過に伴う拡大は見られず、速度・表示ズレとも解消したことを確認
+- 既存のスモークテスト・Open/Play/Pause/Resume/Stopフローに回帰がないことも再確認
+- 計算機: macOS (Apple Silicon) / User: Shu Manabe

@@ -5,10 +5,11 @@ Real-time audio spectrum analyzer built with Python, PyQt6, and pyqtgraph. Open 
 ## Features
 
 - Open audio files via file dialog (wav, flac, mp3, ogg, m4a)
-- Built-in audio playback via sounddevice
+- Built-in audio playback via sounddevice, at the file's native sample rate
 - Play / Pause / Stop controls
 - Real-time spectrum visualization synchronized with playback (~30 fps)
 - Adjustable FFT size (1024, 2048, 4096, 8192)
+- Adjustable max displayed frequency (spin box, capped at the file's Nyquist frequency)
 
 ## Requirements
 

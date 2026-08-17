@@ -5,6 +5,7 @@ import sys
 import threading
 from pathlib import Path
 
+import librosa
 import numpy as np
 import pyqtgraph as pg
 import sounddevice as sd
@@ -12,6 +13,7 @@ from PyQt6.QtCore import QThread, QTimer, QObject, pyqtSignal, pyqtSlot, Qt
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -27,10 +29,35 @@ from spectrum_analyzer import SpectrumAnalyzer
 
 
 def _load_audio_file(file_path):
-    """Load audio file as mono, return (data, sr)."""
-    analyzer = SpectrumAnalyzer(sr=22050)
+    """Load audio file as mono at its native sample rate, return (data, sr)."""
+    analyzer = SpectrumAnalyzer(sr=None)
     y, sr_raw = analyzer.load_audio(file_path)
     return y, sr_raw
+
+
+def _playback_samplerate(fallback_sr: int) -> int:
+    """Return the current default output device's own sample rate.
+
+    Bluetooth outputs (e.g. AirPods) and some audio interfaces run at a
+    fixed internal rate and do not reliably resample a stream opened at
+    an arbitrary rate - opening at a mismatched rate causes audibly
+    wrong-speed / wrong-pitch playback. Always playing at the device's
+    own rate (and resampling our audio to match) sidesteps that.
+    """
+    try:
+        device_info = sd.query_devices(kind="output")
+        rate = int(round(device_info["default_samplerate"]))
+        return rate if rate > 0 else fallback_sr
+    except Exception:
+        return fallback_sr
+
+
+def _resample_for_playback(y: np.ndarray, sr: int, target_sr: int):
+    """Resample audio to target_sr for playback, if needed."""
+    if target_sr == sr:
+        return y, sr
+    y_play = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
+    return y_play, target_sr
 
 
 # ==============================================================================
@@ -215,6 +242,7 @@ class MainWindow(QMainWindow):
         """Disable seek slider when no file is loaded."""
         self.seek_slider.setEnabled(False)
         self.seek_slider.setValue(0)
+        self.spin_max_freq.setEnabled(False)
 
     def _enable_seek(self, duration: float):
         """Enable seek slider and set range for the loaded file."""
@@ -241,12 +269,20 @@ class MainWindow(QMainWindow):
         self.cmb_fft.addItems(["1024", "2048", "4096", "8192"])
         self.cmb_fft.setCurrentText("4096")
 
+        self.spin_max_freq = QDoubleSpinBox()
+        self.spin_max_freq.setDecimals(0)
+        self.spin_max_freq.setRange(1, 1)
+        self.spin_max_freq.setSuffix(" Hz")
+        self.spin_max_freq.setEnabled(False)
+
         ctrl_row.addWidget(self.btn_open)
         ctrl_row.addWidget(self.btn_play)
         ctrl_row.addWidget(self.btn_pause)
         ctrl_row.addWidget(self.btn_stop)
         ctrl_row.addWidget(QLabel("FFT size:"))
         ctrl_row.addWidget(self.cmb_fft)
+        ctrl_row.addWidget(QLabel("Max Freq:"))
+        ctrl_row.addWidget(self.spin_max_freq)
         ctrl_row.addStretch()
         ctrl_row.addWidget(self.lbl_status)
 
@@ -277,6 +313,7 @@ class MainWindow(QMainWindow):
         self.btn_pause.clicked.connect(self._on_pause)
         self.btn_stop.clicked.connect(self._on_stop)
         self.cmb_fft.currentTextChanged.connect(self._on_fft_changed)
+        self.spin_max_freq.valueChanged.connect(self._on_max_freq_changed)
 
         # Player signals
         self._player.playbackFinished.connect(self._on_playback_finished)
@@ -346,18 +383,36 @@ class MainWindow(QMainWindow):
             duration = self._duration_s
             self.lbl_status.setText(f"Loaded: {file_name}  ({duration:.1f} s)")
 
-            self._player.load(y, sr)
+            # Resample for playback to match the output device's own rate -
+            # some devices (Bluetooth in particular) don't reliably convert
+            # a stream opened at an arbitrary rate, which causes audibly
+            # wrong-speed / wrong-pitch playback.
+            play_sr = _playback_samplerate(sr)
+            y_play, play_sr = _resample_for_playback(y, sr, play_sr)
+            self._player.load(y_play, play_sr)
 
             # Enable seek slider with proper range
             self._enable_seek(duration)
 
             hi_freq = float(self._spec_freqs[-1])
-            self.plot_widget.setXRange(0, hi_freq)
+            self._enable_max_freq_control(hi_freq)
 
             self._show_silent_spectrum()
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not load file:\n{e}")
+
+    def _enable_max_freq_control(self, nyquist: float):
+        """Set up the max-frequency spin box for the newly loaded file's Nyquist limit."""
+        self.spin_max_freq.blockSignals(True)
+        self.spin_max_freq.setRange(1, nyquist)
+        self.spin_max_freq.setValue(nyquist)
+        self.spin_max_freq.setEnabled(True)
+        self.spin_max_freq.blockSignals(False)
+        self.plot_widget.setXRange(0, nyquist)
+
+    def _on_max_freq_changed(self, value: float):
+        self.plot_widget.setXRange(0, value)
 
     def _recompute_spectrogram(self):
         """Recompute spectrogram when FFT size changes."""
@@ -369,8 +424,9 @@ class MainWindow(QMainWindow):
                 self._audio_data, self._audio_sr, n_fft=self._n_fft
             )
         )
-        hi_freq = float(self._spec_freqs[-1])
-        self.plot_widget.setXRange(0, hi_freq)
+        # Nyquist frequency is unaffected by FFT size; keep the user's
+        # current max-frequency selection instead of resetting the view.
+        self.plot_widget.setXRange(0, self.spin_max_freq.value())
 
     def _on_fft_changed(self, text: str):
         self._n_fft = int(text)
