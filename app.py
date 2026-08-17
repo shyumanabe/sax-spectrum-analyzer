@@ -79,36 +79,43 @@ class _AudioPlayer(QObject):
         self._play_lock = threading.Lock()
 
     def _cb(self, outdata, frames, tinfo, status):
-        """Audio callback - MUST be as fast as possible. No Qt signal emit."""
+        """Audio callback - MUST be as fast as possible. No Qt signal emit.
+
+        Deliberately lock-free: _pos_frames/_finished are simple attributes
+        whose reads/writes are already atomic under CPython's GIL. Taking
+        self._play_lock here used to make this realtime callback block
+        whenever the GUI thread's poll_position() (called ~30x/sec) held
+        the same lock, which starved the callback's ~21ms deadline and
+        caused audio to drift further and further behind real time the
+        longer playback ran.
+        """
         data = self._data
         if data is None:
             return
         n = data.shape[1] if data.ndim == 2 else len(data)
-        with self._play_lock:
-            c = self._pos_frames
-            if c >= n:
-                outdata[:] = 0.0
-                self._finished = True
-                return
-            e = min(c + frames, n)
-            av = e - c
-            if data.ndim == 2:
-                for ch in range(min(outdata.shape[0], data.shape[0])):
-                    outdata[ch, :av] = data[ch, c:e]
-                    outdata[ch, av:] = 0.0
-            else:
-                outdata[:, :av] = np.expand_dims(data[c:e], axis=1)
-                outdata[:, av:] = 0.0
-            self._pos_frames = e
-            if e >= n:
-                self._finished = True
+        c = self._pos_frames
+        if c >= n:
+            outdata[:] = 0.0
+            self._finished = True
+            return
+        e = min(c + frames, n)
+        av = e - c
+        if data.ndim == 2:
+            for ch in range(min(outdata.shape[0], data.shape[0])):
+                outdata[ch, :av] = data[ch, c:e]
+                outdata[ch, av:] = 0.0
+        else:
+            outdata[:av, 0] = data[c:e]
+            outdata[av:, :] = 0.0
+        self._pos_frames = e
+        if e >= n:
+            self._finished = True
 
     @pyqtSlot()
     def poll_position(self):
         """Called from main thread via queued connection - returns state via signal."""
-        with self._play_lock:
-            current_pos = self._pos_frames / self._sr if self._sr else 0.0
-            finished = self._finished
+        current_pos = self._pos_frames / self._sr if self._sr else 0.0
+        finished = self._finished
         d = self._data
         n = d.shape[1] if d is not None and d.ndim == 2 else len(d) if d is not None else 0
         dur = (n / self._sr) if self._sr else 0.0
@@ -554,7 +561,12 @@ class MainWindow(QMainWindow):
 # ==============================================================================
 
 def main():
-    pg.setConfigOptions(antialias=True)
+    # Antialiased curve redraws are expensive enough to hold the GIL long
+    # enough, at ~30fps, to starve the realtime sounddevice callback thread
+    # of its ~21ms deadline - this was measured to cause audio playback to
+    # drift significantly behind real time (and stutter) the longer
+    # playback ran. Keep antialiasing off so audio stays glitch-free.
+    pg.setConfigOptions(antialias=False)
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     win = MainWindow()
