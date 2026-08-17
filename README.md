@@ -1,21 +1,20 @@
 # SAX Spectrum Analyzer
 
-Real-time audio spectrum analyzer built with Python and Streamlit. Upload an audio file, play it back, and visualize its frequency spectrum at any point in time.
+Real-time audio spectrum analyzer built with Python, PyQt6, and pyqtgraph. Open an audio file, play it back, and visualize its frequency spectrum synchronized with playback.
 
 ## Features
 
-- File upload for multiple audio formats (m4a, mp3, wav, flac, ogg, aac)
-- Built-in audio playback
-- Interactive slider to select playback position
-- Instant frequency spectrum visualization at selected time
-- Full spectrogram heatmap with time cursor overlay
-- Adjustable max frequency and FFT resolution via sidebar
+- Open audio files via file dialog (wav, flac, mp3, ogg, m4a)
+- Built-in audio playback via sounddevice
+- Play / Pause / Stop controls
+- Real-time spectrum visualization synchronized with playback (~30 fps)
+- Adjustable FFT size (1024, 2048, 4096, 8192)
 
 ## Requirements
 
 - Python 3.9+
 - **uv** for dependency management ([install here](https://github.com/astral-sh/uv))
-- **ffmpeg** (required by audioread/librosa to decode m4a, mp3, etc.)
+- **ffmpeg** (required by librosa to decode m4a, mp3, etc.)
   ```bash
     # macOS
     brew install ffmpeg
@@ -24,24 +23,24 @@ Real-time audio spectrum analyzer built with Python and Streamlit. Upload an aud
 ## Setup
 
 ```bash
-# Sync dependencies
 uv sync
 ```
 
 ## Usage
 
 ```bash
-uv run streamlit run app.py --server.headless true
+uv run python app.py
 ```
 
-The application will open in your default browser. Upload a file, move the slider to inspect different frames, and listen via the playback widget.
+A native window will appear. Click "Open File" to load audio, then use Play/Pause/Stop controls. The spectrum plot updates in real time during playback.
 
 ## Project Structure
 
 | File | Description |
 |------|-------------|
-| `app.py` | Streamlit UI (upload, playback, charts) |
+| `app.py` | PyQt6 GUI (file dialog, playback controls, pyqtgraph spectrum) |
 | `spectrum_analyzer.py` | Core FFT / STFT analysis logic (librosa based) |
+| `test_smoke.py` | Smoke test with synthetic audio |
 | `pyproject.toml` | uv dependency manifest |
 
 ## License

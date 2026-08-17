@@ -6,15 +6,15 @@ requires-python = ">=3.9"
 dependencies = [
     "librosa>=0.11.0",
     "numpy>=2.0.2",
-    "plotly>=6.9.0",
-    "pydub>=0.25.1",
+    "pyqt6>=6.8.0",
+    "pyqtgraph>=0.13.7",
     "scipy>=1.13.1",
     "sounddevice>=0.5.5",
-    "streamlit>=1.50.0",
+    "soundfile>=0.13.0",
 ]
 
 [project.scripts]
-sax-spectrum-analyzer = "sax_spectrum_analyzer:main"
+sax-spectrum-analyzer = "app:main"
 
 [build-system]
 requires = ["uv_build>=0.12.2,<0.13.0"]

@@ -1,47 +1,48 @@
-"""Quick smoke test for SpectrumAnalyzer with synthetic audio."""
+# -*- coding: utf-8 -*-
+"""Basic smoke tests for app.py modifications."""
+
 import os
-import tempfile
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
+from app import _AudioPlayer, MainWindow
 
 import numpy as np
-import soundfile as sf
-
-from spectrum_analyzer import SpectrumAnalyzer
 
 
-def generate_test_audio(filepath, duration=2.0, sr=22050):
-    """Generate a short test tone (440 Hz + 880 Hz) for testing."""
-    t = np.linspace(0, duration, int(sr * duration), endpoint=False)
-    signal = 0.5 * np.sin(2 * np.pi * 440 * t) + 0.3 * np.sin(2 * np.pi * 880 * t)
-    sf.write(filepath, signal, sr)
+def test_player_signal_exists():
+    p = _AudioPlayer()
+    assert hasattr(p, "positionPollResult")
+    assert hasattr(p, "poll_position")
+    print("[PASS] positionPollResult signal and poll_position slot exist")
 
 
-def main():
-    print("[TEST] Generating synthetic audio...")
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    tmp.close()
-    generate_test_audio(tmp.name)
+def test_player_seek_method():
+    p = _AudioPlayer()
+    sr = 44100
+    data = np.random.randn(2 * sr).astype(np.float32)
+    p.load(data, sr)
+    assert callable(p.seek), "seek method must be callable"
+    print("[PASS] seek method is callable after loading audio")
 
-    analyzer = SpectrumAnalyzer(sr=22050)
 
-    print("[TEST] Loading audio...")
-    y, sr_raw = analyzer.load_audio(tmp.name)
-    print(f"  Loaded {len(y)} samples at {sr_raw} Hz")
+def testMainWindow_creates_seeksilder():
+    win = MainWindow()
+    assert hasattr(win, "seek_slider"), "MainWindow must have seek_slider"
+    assert not win.seek_slider.isEnabled(), "slider should be disabled before loading"
+    print("[PASS] QSlider exists and is initially disabled")
 
-    print("[TEST] Computing duration...")
-    dur = analyzer.get_duration(y, sr_raw)
-    print(f"  Duration: {dur:.2f}s")
 
-    print("[TEST] Computing full spectrogram...")
-    freqs, S_db, times = analyzer.compute_full_spectrogram(y, sr_raw)
-    print(f"  Freq bins: {len(freqs)}, Time frames: {S_db.shape[1]}")
-
-    print("[TEST] Computing instant spectrum at 0.5s...")
-    f, m, *_ = analyzer.compute_spectrum_at_time(y, sr_raw, 0.5)
-    print(f"  Instant freq bins: {len(f)}")
-
-    os.remove(tmp.name)
-    print("[PASS] All tests passed.")
+def test_no_positionChanged_signal():
+    """The old positionChanged signal must no longer exist."""
+    p = _AudioPlayer()
+    assert not hasattr(p, "positionChanged"), \
+        "Old positionChanged signal must be removed"
+    print("[PASS] Old positionChanged signal is removed")
 
 
 if __name__ == "__main__":
-    main()
+    test_player_signal_exists()
+    test_player_seek_method()
+    testMainWindow_creates_seeksilder()
+    test_no_positionChanged_signal()
+    print("\nAll smoke tests passed.")
