@@ -1,9 +1,9 @@
 # SAX Spectrum Analyzer
 
 Real-time audio spectrum analyzer built with Python, PyQt6, and pyqtgraph. Open up to two audio files (File A / File B), play them back independently, and visually compare their frequency spectra side by side.
+<img width="1543" height="840" alt="スクリーンショット 2026-08-17 13 57 27" src="https://github.com/user-attachments/assets/f4f3f028-7014-4ceb-8131-7b4e69eb7da0" />
 
 ## Features
-
 - Load two independent audio files at once (File A / File B) for spectrum comparison, e.g. two saxophone recordings
 - Each file has its own Open / Play / Pause / Stop controls and seek bar, so the two can be played independently
 - Switchable layout: side-by-side (左右に並べて表示) or stacked (上下に並べて表示), via the Layout dropdown
