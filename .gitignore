@@ -224,3 +224,4 @@ verify_dual_channel_output/
 AGENTS.md
 CLAUDE.md
 example/
+.DS_Store
